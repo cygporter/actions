@@ -1,0 +1,81 @@
+name: cygporter vars
+author: Adam Dinwoodie
+description: Read variables from a cygport file
+inputs:
+  cygport_file:
+    description: Path to the cygport file
+    required: true
+  vars:
+    description: Variable, or list of variables, to extract
+    required: true
+  cygwin_bin_path:
+    description: Path to the Cygwin bin directory
+    required: false
+outputs:
+  vars:
+    description: Object with the requested variables as properties
+    value: ${{ fromJSON(steps.output.outputs.vars) }}
+runs:
+  using: composite
+  steps:
+    - name: Find Cygwin executables
+      id: path
+      shell: pwsh
+      env:
+        CYGWIN_BIN: ${{ inputs.cygwin_bin_path }}
+      runs: |
+        if ($Env:CYGWIN_BIN -eq "") {
+          $cygwinPath = $(bash.exe -c 'cygpath -aw /usr/bin')
+        } else {
+          $cygwinPath = $Env:CYGWIN_BIN
+        }
+        if ($cygwinPath -eq "") {
+          Write-Output "error title=Can't find Cygwin::No Cygwin installation available"
+          exit 1
+        }
+        Write-Output "cygwin_path=$cygwinPath" >>$Env:GITHUB_OUTPUT
+
+    - name: Check Cygwin installation
+      shell: ${{ steps.path.outputs.cygwin_path }}/bash.exe --noprofile --norc -e -o pipefail -o igncr {0}
+      env:
+        PATH: ${{ steps.path.outputs.cygwin_path }}
+      runs: |
+        if [[ "$OSTYPE" != cygwin ]]; then
+          echo "::error title=Not Cygwin::This isn't Cygwin bash!"
+          exit 1
+        fi
+        if ! command -v cygport 2>/dev/null; then
+          echo "::error title=Cygport not installed::Cygport isn't available"
+          exit 1
+        fi
+
+    # TODO: Make this newline / escape / &c safe
+    - name: Extract Cygport variables
+      id: output
+      shell: ${{ steps.path.outputs.cygwin_path }}/bash.exe --noprofile --norc -e -o pipefail -o igncr {0}
+      env:
+        PATH: ${{ steps.path.outputs.cygwin_path }}
+        CYGPORT_FILE: ${{ inputs.cygport_file }}
+        VARS: ${{ join(inputs.vars, ' ') }}
+      runs: |
+        if [[ "$RUNNER_DEBUG" ]]; then
+          append () {
+            tee -a "$1"
+          }
+        else
+          append () {
+            cat >"$1"
+          }
+        fi
+        cygport "$CYGPORT_FILE" vars $VARS | append "$RUNNER_TEMP"/cygport_vars
+        . "$RUNNER_TEMP"/cygport_vars
+        {
+          printf '{'
+          first_printed=
+          for v in $VARS; do
+            if [[ "$first_printed" ]]; then
+              printf ,
+            fi
+            printf '"%q":"%q"' "$v" "${!v}"
+          done
+        } | append "$GITHUB_OUTPUT"
