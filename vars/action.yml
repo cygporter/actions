@@ -1,0 +1,58 @@
+name: cygporter vars
+author: Adam Dinwoodie
+description: Read variables from a cygport file
+inputs:
+  cygport_file:
+    description: Path to the cygport file
+    required: true
+  vars:
+    description: Variables, as a space-separated list, to extract
+    required: true
+  cygwin_bin_path:
+    description: Path to the Cygwin bin directory
+    required: false
+    default: 'C:\cygwin\bin'
+outputs:
+  vars:
+    description: JSON string with the variables as object properties
+    value: ${{ steps.output.outputs.vars }}
+runs:
+  using: composite
+  steps:
+    - name: Check Cygwin installation
+      shell: ${{ inputs.cygwin_bin_path }}\bash.exe --noprofile --norc -e -o pipefail -o igncr {0}
+      run: |
+        export PATH=/usr/bin:$PATH
+        if [[ "$OSTYPE" != cygwin ]]; then
+          echo "::error title=Not Cygwin::This isn't Cygwin bash!  Set cygwin_bin_path or add Cygwin to PATH."
+          exit 1
+        fi
+        if ! command -v cygport 2>/dev/null; then
+          echo "::error title=Cygport not installed::Cygport isn't available.  Install cygport."
+          exit 1
+        fi
+
+    - name: Extract Cygport variables
+      id: output
+      shell: ${{ inputs.cygwin_bin_path }}\bash.exe --noprofile --norc -e -o pipefail -o igncr {0}
+      env:
+        CYGPORT_FILE: ${{ inputs.cygport_file }}
+        VARS: ${{ inputs.vars }}
+      run: |
+        export PATH=/usr/bin:$PATH
+        if [[ "$RUNNER_DEBUG" ]]; then
+          append () {
+            tee -a "$1"
+          }
+        else
+          append () {
+            cat >>"$1"
+          }
+        fi
+        cygport "$CYGPORT_FILE" vars $VARS | append "$RUNNER_TEMP"/cygport_vars
+        . "$RUNNER_TEMP"/cygport_vars
+        jq_args=()
+        for v in $VARS; do
+          jq_args+=(--arg "$v" "${!v}")
+        done
+        jq -n "${jq_args[@]}" '@json "vars=\($ARGS.named)"' | append "$GITHUB_OUTPUT"
